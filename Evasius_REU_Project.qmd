@@ -1,0 +1,224 @@
+---
+title: "Evasius_REU_Project"
+author: "Madison Evasius"
+format: html
+editor: visual
+---
+
+## Download and Create DFs
+
+```{r}
+#### IMPORT PACKAGES AND CREATE THEMES ####
+library(readr)
+# Tables/analysis
+library(data.table)     # Fast data analysis
+library(dplyr)          # Cleaning up data
+library(lubridate)      # For dates
+library(broom) 
+# Plots
+library(ggplot2)        # For plots
+library(scales)         # Plot specifics
+library(maps)           # Adding maps
+library(patchwork)      # Combining plots
+library(ggpubr) 
+
+#For confidence intervals in plots
+library(magrittr)
+library(gcookbook)
+```
+
+```{r}
+#### DATA IMPORT ####
+# data import 
+NEFSC_WGOM_Age1_SSB_spring <- read_csv("OneDrive - Bowdoin College/GMRI REU/Data/R/NEFSC_WGOM_Age1_SSB_spring.csv")
+PrelimEst_SSB_R_WGOM <- read_csv("OneDrive - Bowdoin College/GMRI REU/Data/R/PrelimEstimates_SSB_R_byWGOMpop[4].csv")
+
+# excel data import
+library(readxl)
+closure_timeline <- read_excel("OneDrive - Bowdoin College/GMRI REU/Data/R/closure timeline.xlsx")
+closure_timeline <- closure_timeline %>% 
+  rename("Year" = "Date Put in Effect",
+         "Name" = "Closure Name")
+```
+
+```{r}
+#### DATA TRANSFORM ####
+
+## prelim_estimates transform R and SSB for WGOM populations
+# rename columns
+PrelimEst_SSB_R_WGOM <- PrelimEst_SSB_R_WGOM %>% rename("Year" = "year")
+
+## NEFSC environemntal data transform
+environmental_data <- select(NEFSC_WGOM_Age1_SSB_spring, Year, Heatwave, GSI)
+```
+
+```{r}
+#### DATA MERGE ####
+
+FINAL_TABLE <- merge(PrelimEst_SSB_R_WGOM, environmental_data, by = "Year", all.x = TRUE) %>%
+  merge(closure_timeline, by = "Year", all.x = TRUE)
+```
+
+```{r}
+#### CREATE TIMEBLOCKS ####
+
+# create a timeblock dataframe
+time_blocks <- data.frame(Year = 1981:2021,
+                 Rolling_Closure = NA,
+                 Spring_Spawning_Closure = NA,
+                 Winter_Spawning_Closure = NA,
+                 Quota_MGT = NA)
+
+# time_blocks if we decide to do 2 columns of management regimes
+time_blocks$Rolling_Closure[time_blocks$Year %in% 1981:1997] <- "No_Closure"
+time_blocks$Rolling_Closure[time_blocks$Year %in% 1998:2021] <- "Rolling_Closure"
+time_blocks$Winter_Spawning_Closure[time_blocks$Year %in% 1981:2002] <- "No_Spawning_Closure"
+time_blocks$Winter_Spawning_Closure[time_blocks$Year %in% 2003:2021] <- "Winter_Spawning_Closure"
+time_blocks$Spring_Spawning_Closure[time_blocks$Year %in% 1981:2008] <- "No_Spawning_Closure"
+time_blocks$Spring_Spawning_Closure[time_blocks$Year %in% 2009:2021] <- "Spring_Spawning_Closure"
+time_blocks$Quota_MGT[time_blocks$Year %in% 1981:2009] <- "Indirect_Controls"
+time_blocks$Quota_MGT[time_blocks$Year %in% 2010:2021] <- "Quotas"
+```
+
+```{r}
+#### FINAL DATA MERGE ####
+
+FINAL_TABLE <- merge(FINAL_TABLE, time_blocks, by = "Year")
+```
+
+## GAM Code
+
+```{r}
+#### IMPORT PACKAGES ####
+
+# GAM stuff
+library(mgcv)
+library(visreg)
+library(ggeffects)
+library(gratia)
+library(readr)
+# Tables/analysis
+library(data.table)     # Fast data analysis
+library(dplyr)          # Cleaning up data
+library(lubridate)      # For dates
+library(broom) 
+# Plots
+library(ggplot2)        # For plots
+library(scales)         # Plot specifics
+library(maps)           # Adding maps
+library(patchwork)      # Combining plots
+library(ggpubr) 
+#For confidence intervals in plots
+library(magrittr)
+library(gcookbook)
+# for data exploration
+library(GGally)
+```
+
+```{r}
+#### DATA TABLE TRANSFORMS ####
+
+## split FINAL_TABLE into winter and spring groups
+FINAL_TABLE_SPRING <- filter(FINAL_TABLE, population == "spring")
+FINAL_TABLE_WINTER <- filter(FINAL_TABLE, population == "winter")
+```
+
+```{r}
+#### WINTER GAM ####
+
+## Variable relationships
+# compare each variable against the other
+# correlation coefficient of +/- 1 indicates linear relationship. (+) = direct, (-) = indirect.
+ggpairs(FINAL_TABLE_WINTER %>% select(c(ssb.apx, r, rps.apx, bt_anomaly, sst_anomaly, Heatwave, GSI))) +
+  labs(subtitle = "Numeric variance exploration") 
+ggpairs(FINAL_TABLE_WINTER %>% select(c(ssb.st, r, rps.st, bt_anomaly, sst_anomaly, Heatwave, GSI))) +
+  labs(subtitle = "Numeric variance exploration") 
+
+# sbb GAM
+WINTER_GAM_ssb <- gam(ssb.apx ~ factor(Quota_MGT) + factor(Rolling_Closure) + factor(Winter_Spawning_Closure) +
+                       s(bt_anomaly, k = 4) + s(GSI, k = 4) + s(Heatwave, k = 4),
+                       data = FINAL_TABLE_WINTER, method = "REML")
+summary(WINTER_GAM_ssb)
+
+# draws partial effects of each explanatory variable (smooths and factors) on the response variable
+# 0 is the mean response (in this case, mean ssb). above 0 means it has an increasing effect, below zero means a decreasing effect
+draw(WINTER_GAM_ssb, parametric = TRUE, scales = "fixed")
+
+## RperS GAM
+WINTER_GAM_RperS <- gam(rps.apx ~ factor(Rolling_Closure) + factor(Winter_Spawning_Closure) + factor(Quota_MGT) 
+                        + s(GSI, k = 4) + s(bt_anomaly, k = 4) + s(Heatwave, k = 4)
+                        ,data = FINAL_TABLE_WINTER, method = "REML")
+summary(WINTER_GAM_RperS)
+
+draw(WINTER_GAM_RperS, parametric = TRUE, scales = "fixed")
+
+## R GAM
+WINTER_GAM_r <- gam(r ~ factor(Rolling_Closure) + factor(Winter_Spawning_Closure) + factor(Quota_MGT) 
+                        + s(GSI, k = 4) + s(bt_anomaly, k = 4) + s(sst_anomaly, k = 4) + s(Heatwave, k = 4),
+                        data = FINAL_TABLE_WINTER, method = "REML")
+summary(WINTER_GAM_r)
+
+draw(WINTER_GAM_r, parametric = TRUE, scales = "fixed")
+# vis.gam(WINTER_GAM_r, type = "response", theta = 210)
+```
+
+```{r}
+#### run against real data (example format) ####
+
+winter_RperS_output_bt_anomaly <-data.frame( bt_anomaly = seq(-1.5, 2.5, length.out = 100),
+                                  Heatwave = median(FINAL_TABLE_WINTER$Heatwave, na.rm = T),
+                                  GSI = median(FINAL_TABLE_WINTER$GSI, na.rm = T),
+                                  MGT = levels(FINAL_TABLE_WINTER$MGT))
+
+pred_winter_RperS_output_bt_anomaly <- predict(WINTER_GAM_RperS, winter_RperS_output_bt_anomaly, type = "response")
+
+winter_RperS_output_bt_anomaly$prediction <- pred_winter_RperS_output_bt_anomaly
+
+winter_RperS_model_bt_anomaly_plot <- ggplot() +
+  geom_line(data = FINAL_TABLE_WINTER, aes (x = bt_anomaly, y = RperS, group = MGT, color = "Real")) +
+  geom_line(data = winter_RperS_output_bt_anomaly, aes(x = bt_anomaly, y = prediction, group = MGT, color = "Model")) +
+  facet_wrap(.~MGT) +
+  theme_bw() + # simple display theme (white background, light grey grid)
+  theme(legend.position = 'bottom') 
+```
+
+```{r}
+#### SPRING GAM ####
+
+# compare each variable against the other
+# correlation coefficienty of +/- 1 indicates linear relationship. (+) = direct, (-) = indirect.
+ggpairs(FINAL_TABLE_SPRING %>% select(c(ssb.apx, r, rps.apx, bt_anomaly, sst_anomaly, Heatwave, GSI))) +
+  labs(subtitle = "Numeric variance exploration") 
+ggpairs(FINAL_TABLE_SPRING %>% select(c(ssb.st, r, rps.st, bt_anomaly, sst_anomaly, Heatwave, GSI))) +
+  labs(subtitle = "Numeric variance exploration") 
+
+## SSB
+# ssb GAM
+SPRING_GAM_ssb <- gam(ssb.apx ~ factor(Rolling_Closure) + factor(Spring_Spawning_Closure) + factor(Quota_MGT)
+                      + s(bt_anomaly, k = 4) + s(GSI, k = 4) + s(Heatwave, k = 4),
+                      data = FINAL_TABLE_SPRING, method = "REML", family=Tweedie(1.25,power(.1)))
+summary(SPRING_GAM_ssb)
+
+# draws partial effects of each explanatory variable (smooths and factors) on the response variable
+# 0 is the mean response (in this case, mean ssb). above 0 means it has an increasing effect, below zero means a decreasing effect
+draw(SPRING_GAM_ssb, parametric = TRUE, scales = "fixed")
+
+## RperS GAM
+
+SPRING_GAM_RperS <- gam(rps.apx ~ factor(Rolling_Closure) + factor(Spring_Spawning_Closure) + factor(Quota_MGT) +
+                        s(sst_anomaly, k = 4) + s(bt_anomaly, k = 4), 
+                        data = FINAL_TABLE_SPRING, method = "REML", family=Tweedie(1.25,power(.1)))
+summary(SPRING_GAM_RperS)
+
+draw(SPRING_GAM_RperS, parametric = TRUE)
+
+## r GAM
+SPRING_GAM_r <- gam(r ~ factor(Rolling_Closure) + factor(Spring_Spawning_Closure) + factor(Quota_MGT)
+                      + s(bt_anomaly, k = 4) + s(GSI, k = 4) + s(Heatwave, k = 4),
+                      data = FINAL_TABLE_SPRING, method = "REML", family=Tweedie(1.25,power(.1)))
+summary(SPRING_GAM_r)
+
+# draws partial effects of each explanatory variable (smooths and factors) on the response variable
+# 0 is the mean response (in this case, mean ssb). above 0 means it has an increasing effect, below zero means a decreasing effect
+draw(SPRING_GAM_r, parametric = TRUE, scales = "fixed")
+```
