@@ -1,5 +1,6 @@
 #### IMPORT PACKAGES ####
 # GAM stuff
+library(car)
 library(mgcv)
 library(visreg)
 library(ggeffects)
@@ -24,8 +25,23 @@ library(GGally)
 #### DATA TABLE TRANSFORMS ####
 ## split FINAL_TABLE into winter and spring groups
 FINAL_TABLE_SPRING <- filter(FINAL_TABLE, population == "spring")
+FINAL_TABLE_SPRING["Heatwave"][is.na(FINAL_TABLE_SPRING["Heatwave"])] <- 0
 FINAL_TABLE_WINTER <- filter(FINAL_TABLE, population == "winter")
+FINAL_TABLE_WINTER["Heatwave"][is.na(FINAL_TABLE_WINTER["Heatwave"])] <- 0
 
+scale <- 100
+
+ggplot(data = FINAL_TABLE_SPRING) +
+  geom_line(aes(x = Year, y = Heatwave/scale, color = 'Heatwave')) +
+  geom_line(aes(x = Year, y = GSI, color = 'GSI')) +
+  geom_line(aes(x = Year, y = bt_anomaly, color = 'bt_anomaly')) +
+  geom_line(aes(x = Year, y = sst_anomaly, color = 'sst_anomaly')) +
+  scale_y_continuous(
+    # Features of the first axis
+    name = "GSI, bt_anomaly, sst_anomaly",
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*scale, name="Heatwave")
+  )
 #### WINTER GAM ####
 
 ## SSB
@@ -38,13 +54,13 @@ ggpairs(FINAL_TABLE_WINTER %>% select(c(ssb.st, r, rps.st, bt_anomaly, sst_anoma
 
 # sbb GAM
 WINTER_GAM_ssb <- gam(ssb.apx ~ factor(Quota_MGT) + factor(Closures_WINTER) +
-                       s(bt_anomaly, k = 4) + s(GSI, k = 4) + Heatwave, select = TRUE,
-                       data = FINAL_TABLE_WINTER, method = "REML")
+                        s(bt_anomaly, k = 4), select = TRUE,
+                      data = FINAL_TABLE_WINTER, method = "REML")
 summary(WINTER_GAM_ssb)
-
+concurvity(WINTER_GAM_ssb, full = TRUE)
 # created by Gavin L. Simpson in {gratia}
 # Plots estimated smooths from a fitted GAM model in a similar way to mgcv::plot.gam() but instead of using base graphics, ggplot2::ggplot() is used instead.
-draw(WINTER_GAM_ssb, parametric = TRUE, scales = "fixed")
+draw(WINTER_GAM_ssb, parametric = TRUE)
 
 par(mfrow = c(2, 2))
 gam.check(WINTER_GAM_ssb)
@@ -63,7 +79,7 @@ W_ssb_closures_plot <- ggplot() +
             alpha = 1/5) +
   geom_rect(aes(xmin = 2003, xmax = 2021, ymin = -Inf, ymax = Inf, fill = 'Winter Spawning Closures'),
             alpha = 1/5) +
-  geom_line(data = FINAL_TABLE_WINTER, aes(x = Year, y = ssb.apx), size = 1, alpha = 0.5) +
+  geom_line(data = FINAL_TABLE_WINTER, aes(x = Year, y = ssb.apx), size = 1, alpha = 0.5) 
   geom_line(data = WINTER_ssb_pred, aes(x = Year, y = predicted_values, color = 'Model'), size = 1)
 
 #quota MGT
@@ -81,9 +97,10 @@ ggarrange(W_ssb_closures_plot, W_ssb_quota_plot, ncol = 1, nrow = 2)
 ## RperS GAM
 # maybe consider including ssb into model
 WINTER_GAM_RperS <- gam(rps.apx ~ factor(Closures_WINTER) + factor(Quota_MGT) 
-                        + s(GSI, k = 4) + s(bt_anomaly, k = 4) + s(ssb.apx, k = 4),
+                         + s(sst_anomaly, k = 4),
                          select = TRUE, data = FINAL_TABLE_WINTER, method = "REML")
 summary(WINTER_GAM_RperS)
+concurvity(WINTER_GAM_RperS, full = FALSE)
 
 draw(WINTER_GAM_RperS, parametric = TRUE, scales = "fixed")
 
@@ -120,9 +137,10 @@ ggarrange(W_rps_closures_plot, W_rps_quota_plot, ncol = 1, nrow = 2)
 
 ## R GAM
 WINTER_GAM_r <- gam(r ~ factor(Closures_WINTER) + factor(Quota_MGT) 
-                        + s(GSI, k = 4) + s(ssb.apx, k = 4), select = TRUE,
+                        + s(ssb.apx, k = 4), select = TRUE,
                         data = FINAL_TABLE_WINTER, method = "REML")
 summary(WINTER_GAM_r)
+concurvity(WINTER_GAM_r, full = TRUE)
 
 draw(WINTER_GAM_r, parametric = TRUE, scales = "fixed")
 vis.gam(WINTER_GAM_r, type = "response", theta = 210)
@@ -158,57 +176,6 @@ W_r_quota_plot <- ggplot() +
 
 ggarrange(W_r_closures_plot, W_r_quota_plot, ncol = 1, nrow = 2)
 
-#### run against real data (example format) ####
-winter_RperS_output_bt_anomaly <-data.frame( bt_anomaly = seq(-1.5, 2.5, length.out = 100),
-                                  Heatwave = median(FINAL_TABLE_WINTER$Heatwave, na.rm = T),
-                                  GSI = median(FINAL_TABLE_WINTER$GSI, na.rm = T),
-                                  MGT = levels(FINAL_TABLE_WINTER$MGT))
-
-pred_winter_RperS_output_bt_anomaly <- predict(WINTER_GAM_RperS, winter_RperS_output_bt_anomaly, type = "response")
-
-winter_RperS_output_bt_anomaly$prediction <- pred_winter_RperS_output_bt_anomaly
-
-winter_RperS_model_bt_anomaly_plot <- ggplot() +
-  geom_line(data = FINAL_TABLE_WINTER, aes (x = bt_anomaly, y = RperS, group = MGT, color = "Real")) +
-  geom_line(data = winter_RperS_output_bt_anomaly, aes(x = bt_anomaly, y = prediction, group = MGT, color = "Model")) +
-  facet_wrap(.~MGT) +
-  theme_bw() + # simple display theme (white background, light grey grid)
-  theme(legend.position = 'bottom') 
-
-# run against real data (Heatwave)
-winter_RperS_output_Heatwave <-data.frame( Heatwave = seq(-1.0, 2.5, length.out = 100),
-                                             bt_anomaly = median(FINAL_TABLE_WINTER$bt_anomaly, na.rm = T),
-                                             GSI = median(FINAL_TABLE_WINTER$GSI, na.rm = T),
-                                             MGT = levels(FINAL_TABLE_WINTER$MGT))
-
-pred_winter_RperS_output_Heatwave <- predict(WINTER_GAM_RperS, winter_RperS_output_Heatwave, type = "response")
-
-winter_RperS_output_Heatwave$prediction <- pred_winter_RperS_output_Heatwave
-
-winter_RperS_model_Heatwave_plot <- ggplot() +
-  geom_line(data = FINAL_TABLE_WINTER, aes (x = Heatwave, y = RperS, group = MGT, color = "Real")) +
-  geom_line(data = winter_RperS_output_Heatwave, aes(x = Heatwave, y = prediction, group = MGT, color = "Model")) +
-  facet_wrap(.~MGT) +
-  theme_bw() + # simple display theme (white background, light grey grid)
-  theme(legend.position = 'bottom') 
-
-# run against real data (GSI)
-winter_RperS_output_GSI <-data.frame( GSI = seq(-1.0, 2.0, length.out = 100),
-                                           bt_anomaly = median(FINAL_TABLE_WINTER$bt_anomaly, na.rm = T),
-                                           Heatwave = median(FINAL_TABLE_WINTER$Heatwave, na.rm = T),
-                                           MGT = levels(FINAL_TABLE_WINTER$MGT))
-
-pred_winter_RperS_output_GSI <- predict(WINTER_GAM_RperS, winter_RperS_output_GSI, type = "response")
-
-winter_RperS_output_GSI$prediction <- pred_winter_RperS_output_GSI
-
-winter_RperS_model_GSI_plot <- ggplot() +
-  geom_line(data = FINAL_TABLE_WINTER, aes (x = GSI, y = RperS, group = MGT, color = "Real")) +
-  geom_line(data = winter_RperS_output_GSI, aes(x = GSI, y = prediction, group = MGT, color = "Model")) +
-  facet_wrap(.~MGT) +
-  theme_bw() + # simple display theme (white background, light grey grid)
-  theme(legend.position = 'bottom') 
-
 #### SPRING GAM ####
 
 # compare each variable against the other
@@ -221,10 +188,10 @@ ggpairs(FINAL_TABLE_SPRING %>% select(c(ssb.st, r, rps.st, bt_anomaly, sst_anoma
 ## SSB
 # ssb GAM
 SPRING_GAM_ssb <- gam(ssb.apx ~ factor(Closures_SPRING) + factor(Quota_MGT)
-                      + s(bt_anomaly, k = 4) + Heatwave,
+                      + s(bt_anomaly, k = 4),
                       select = TRUE, data = FINAL_TABLE_SPRING, method = "REML", family=Tweedie(1.25,power(.1)))
 summary(SPRING_GAM_ssb)
-
+concurvity(SPRING_GAM_ssb, full = FALSE)
 # draws partial effects of each explanatory variable (smooths and factors) on the response variable
 # 0 is the mean response (in this case, mean ssb). above 0 means it has an increasing effect, below zero means a decreasing effect
 draw(SPRING_GAM_ssb, parametric = TRUE, scales = "fixed")
@@ -264,9 +231,10 @@ ggarrange(S_ssb_closures_plot, S_ssb_quota_plot, ncol = 1, nrow = 2)
 ## RperS GAM
 
 SPRING_GAM_RperS <- gam(rps.apx ~ factor(Closures_SPRING) + factor(Quota_MGT) +
-                        s(sst_anomaly, k = 4) + s(ssb.apx, k = 4) + s(Heatwave, k = 4) + s(GSI, k = 4), 
-                        select = TRUE, data = FINAL_TABLE_SPRING, method = "REML", family=Tweedie(1.25,power(.1)))
+                        s(Heatwave, k = 4), 
+                        select = TRUE, data = FINAL_TABLE_SPRING, method = "REML", family = tw())
 summary(SPRING_GAM_RperS)
+concurvity(SPRING_GAM_RperS, full = FALSE)
 
 draw(SPRING_GAM_RperS, parametric = TRUE, scales = "fixed")
 
@@ -304,9 +272,10 @@ ggarrange(S_rps_closures_plot, S_rps_quota_plot, ncol = 1, nrow = 2)
 
 ## r GAM
 SPRING_GAM_r <- gam(r ~ factor(Closures_SPRING) + factor(Quota_MGT)
-                      + s(sst_anomaly, k = 4) + s(GSI, k = 4) + s(ssb.apx, k = 4) + Heatwave,
-                      select = TRUE, data = FINAL_TABLE_SPRING, method = "REML", family=Tweedie(1.25,power(.1)))
+                      + s(ssb.apx, k = 4),
+                      select = TRUE, data = FINAL_TABLE_SPRING, method = "REML", family= tw())
 summary(SPRING_GAM_r)
+concurvity(SPRING_GAM_r, full = FALSE)
 
 # draws partial effects of each explanatory variable (smooths and factors) on the response variable
 # 0 is the mean response (in this case, mean ssb). above 0 means it has an increasing effect, below zero means a decreasing effect
